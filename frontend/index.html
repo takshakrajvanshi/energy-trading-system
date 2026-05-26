@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SolarPeer Energy Marketplace</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.11.1/ethers.umd.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0px 4px 12px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #0a7d32;
+            text-align: center;
+        }
+
+        h2 {
+            color: #0056b3;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            background: #fafafa;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            font-size: 15px;
+        }
+
+        button {
+            margin-top: 15px;
+            padding: 12px 20px;
+            background: #28a745;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font-size: 15px;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #218838;
+        }
+
+        .buy-btn {
+            background: #007bff;
+        }
+
+        .buy-btn:hover {
+            background: #0056b3;
+        }
+
+        .balance-box {
+            background: #eef5ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            background: #fff3cd;
+            border-radius: 8px;
+            color: #856404;
+            font-weight: bold;
+        }
+
+        .wallet {
+            word-break: break-all;
+            color: #0a7d32;
+            font-weight: bold;
+        }
+
+        .listing-info {
+            margin-top: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>☀️ SolarPeer Energy Marketplace</h1>
+
+    <button id="connectBtn" onclick="connectWallet()">
+        Connect MetaMask
+    </button>
+
+    <p>
+        Connected Wallet:
+        <span class="wallet" id="walletAddress">
+            Not Connected
+        </span>
+    </p>
+
+    <!-- Balances -->
+    <div class="card">
+
+        <h2>💰 Wallet Balances</h2>
+
+        <div class="balance-box">
+            <p>
+                ⚡ Energy Tokens (SET):
+                <strong id="energyBalance">0</strong>
+            </p>
+
+            <p>
+                💵 MockUSD (mUSD):
+                <strong id="usdBalance">0</strong>
+            </p>
+        </div>
+
+        <button onclick="refreshBalances()">
+            Refresh Balances
+        </button>
+
+    </div>
+
+    <!-- Seller -->
+    <div class="card">
+
+        <h2>⚡ Sell Energy</h2>
+
+        <input
+            type="number"
+            id="listAmount"
+            placeholder="Enter energy amount (SET)"
+        >
+
+        <input
+            type="number"
+            id="listPrice"
+            placeholder="Enter price per token (mUSD)"
+        >
+
+        <button onclick="listEnergy()">
+            List Energy for Sale
+        </button>
+
+    </div>
+
+    <!-- Buyer -->
+    <div class="card">
+
+        <h2>🛒 Buy Energy</h2>
+
+        <input
+            type="number"
+            id="buyListingId"
+            placeholder="Enter Listing ID"
+        >
+
+        <input
+            type="number"
+            id="buyCost"
+            placeholder="Enter Total Cost"
+        >
+
+        <button class="buy-btn" onclick="buyEnergy()">
+            Buy Energy
+        </button>
+
+        <div class="listing-info">
+            Example:
+            If seller listed 10 SET at price 2,
+            then total cost = 20
+        </div>
+
+    </div>
+
+    <!-- Status -->
+    <div id="status">
+        Ready...
+    </div>
+
+</div>
+
+<script>
+
+    // ===================================================
+    // CONTRACT ADDRESSES
+    // ===================================================
+
+    const MARKETPLACE_ADDRESS =
+        "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853";
+
+    const ENERGY_TOKEN_ADDRESS =
+        "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707";
+
+    const STABLECOIN_ADDRESS =
+        "0x0165878A594ca255338adfa4d48449f69242Eb8F";
+
+    // ===================================================
+    // ABIs
+    // ===================================================
+
+    const ERC20_ABI = [
+
+        "function balanceOf(address account) view returns (uint256)",
+
+        "function approve(address spender, uint256 amount) returns (bool)"
+    ];
+
+    const MARKETPLACE_ABI = [
+
+        "function listEnergy(uint256 _amount, uint256 _pricePerToken) external",
+
+        "function executeTrade(uint256 _listingId) external"
+    ];
+
+    // ===================================================
+    // GLOBAL VARIABLES
+    // ===================================================
+
+    let provider;
+    let signer;
+    let userAddress;
+
+    let energyToken;
+    let stablecoin;
+    let marketplace;
+
+    // ===================================================
+    // STATUS MESSAGE
+    // ===================================================
+
+    function setStatus(message) {
+
+        document.getElementById("status").innerText =
+            message;
+
+        console.log(message);
+    }
+
+    // ===================================================
+    // CONNECT METAMASK
+    // ===================================================
+
+    async function connectWallet() {
+
+        if (!window.ethereum) {
+
+            alert("Please install MetaMask");
+
+            return;
+        }
+
+        try {
+
+            provider =
+                new ethers.BrowserProvider(window.ethereum);
+
+            await provider.send(
+                "eth_requestAccounts",
+                []
+            );
+
+            signer =
+                await provider.getSigner();
+
+            userAddress =
+                await signer.getAddress();
+
+            document.getElementById(
+                "walletAddress"
+            ).innerText = userAddress;
+
+            document.getElementById(
+                "connectBtn"
+            ).style.display = "none";
+
+            // Initialize contracts
+
+            energyToken =
+                new ethers.Contract(
+                    ENERGY_TOKEN_ADDRESS,
+                    ERC20_ABI,
+                    signer
+                );
+
+            stablecoin =
+                new ethers.Contract(
+                    STABLECOIN_ADDRESS,
+                    ERC20_ABI,
+                    signer
+                );
+
+            marketplace =
+                new ethers.Contract(
+                    MARKETPLACE_ADDRESS,
+                    MARKETPLACE_ABI,
+                    signer
+                );
+
+            setStatus("✅ Wallet Connected");
+
+            refreshBalances();
+
+        } catch (error) {
+
+            console.error(error);
+
+            setStatus(
+                "❌ Error connecting wallet"
+            );
+        }
+    }
+
+    // ===================================================
+    // REFRESH BALANCES
+    // ===================================================
+
+    async function refreshBalances() {
+
+        if (!signer) {
+
+            setStatus(
+                "⚠️ Connect wallet first"
+            );
+
+            return;
+        }
+
+        try {
+
+            const energyBal =
+                await energyToken.balanceOf(
+                    userAddress
+                );
+
+            const usdBal =
+                await stablecoin.balanceOf(
+                    userAddress
+                );
+
+            document.getElementById(
+                "energyBalance"
+            ).innerText =
+                ethers.formatUnits(
+                    energyBal,
+                    18
+                );
+
+            document.getElementById(
+                "usdBalance"
+            ).innerText =
+                ethers.formatUnits(
+                    usdBal,
+                    18
+                );
+
+            setStatus(
+                "✅ Balances Updated"
+            );
+
+        } catch (error) {
+
+            console.error(error);
+
+            setStatus(
+                "❌ Failed to fetch balances"
+            );
+        }
+    }
+
+    // ===================================================
+    // LIST ENERGY
+    // ===================================================
+
+    async function listEnergy() {
+
+        if (!signer) {
+
+            alert(
+                "Connect wallet first"
+            );
+
+            return;
+        }
+
+        const amount =
+            document.getElementById(
+                "listAmount"
+            ).value;
+
+        const price =
+            document.getElementById(
+                "listPrice"
+            ).value;
+
+        try {
+
+            setStatus(
+                "⏳ Approving SET tokens..."
+            );
+
+            const approveTx =
+                await energyToken.approve(
+                    MARKETPLACE_ADDRESS,
+                    ethers.parseUnits(
+                        amount,
+                        18
+                    )
+                );
+
+            await approveTx.wait();
+
+            setStatus(
+                "⏳ Listing energy..."
+            );
+
+            const listTx =
+                await marketplace.listEnergy(
+                    ethers.parseUnits(
+                        amount,
+                        18
+                    ),
+                    price
+                );
+
+            await listTx.wait();
+
+            setStatus(
+                "✅ Energy Listed Successfully"
+            );
+
+            refreshBalances();
+
+        } catch (error) {
+
+            console.error(error);
+
+            setStatus(
+                "❌ Error listing energy"
+            );
+        }
+    }
+
+    // ===================================================
+    // BUY ENERGY
+    // ===================================================
+
+    async function buyEnergy() {
+
+        if (!signer) {
+
+            alert(
+                "Connect wallet first"
+            );
+
+            return;
+        }
+
+        const listingId =
+            document.getElementById(
+                "buyListingId"
+            ).value;
+
+        const totalCost =
+            document.getElementById(
+                "buyCost"
+            ).value;
+
+        try {
+
+            setStatus(
+                "⏳ Approving mUSD..."
+            );
+
+            const approveTx =
+                await stablecoin.approve(
+                    MARKETPLACE_ADDRESS,
+                    ethers.parseUnits(
+                        totalCost,
+                        18
+                    )
+                );
+
+            await approveTx.wait();
+
+            setStatus(
+                "⏳ Executing trade..."
+            );
+
+            const tradeTx =
+                await marketplace.executeTrade(
+                    listingId
+                );
+
+            await tradeTx.wait();
+
+            setStatus(
+                "✅ Trade Completed Successfully"
+            );
+
+            refreshBalances();
+
+        } catch (error) {
+
+            console.error(error);
+
+            setStatus(
+                "❌ Trade Failed"
+            );
+        }
+    }
+
+</script>
+
+</body>
+</html>
